@@ -590,6 +590,131 @@ func getTransactionsByIndex(context context.Context, dbSvc *dynamodb.Client, ten
 	return transactions, newLastTransactionID, nil
 }
 
+// GetTransaction retrieves a single transaction by its composite key
+func GetTransaction(ctx context.Context, dbSvc *dynamodb.Client, tenantID, accountID, systemTransactionID string) (*TransactionEntry, error) {
+    // Try GetItem first (optimal if SystemTransactionID is the sort key)
+    getInput := &dynamodb.GetItemInput{
+        TableName: aws.String("TransactionsTable"),
+        Key: map[string]types.AttributeValue{
+            "TenantID":    &types.AttributeValueMemberS{Value: tenantID},
+            "TransactionID": &types.AttributeValueMemberS{Value: systemTransactionID},
+        },
+    }
+    result, err := dbSvc.GetItem(ctx, getInput)
+    if err != nil {
+        return nil, fmt.Errorf("GetItem failed: %w", err)
+    }
+    if result.Item != nil {
+        return unmarshalTransaction(result.Item)
+    }
+
+    // Fall back to Query if GetItem didn't find it
+    queryInput := &dynamodb.QueryInput{
+        TableName:              aws.String("TransactionsTable"),
+        KeyConditionExpression: aws.String("TenantID = :tenantId AND AccountID = :accountId"),
+        FilterExpression:       aws.String("TransactionID = :systemTxId"),
+        ExpressionAttributeValues: map[string]types.AttributeValue{
+            ":tenantId":   &types.AttributeValueMemberS{Value: tenantID},
+            ":accountId":  &types.AttributeValueMemberS{Value: accountID},
+            ":systemTxId": &types.AttributeValueMemberS{Value: systemTransactionID},
+        },
+        Limit: aws.Int32(1),
+    }
+    queryResult, err := dbSvc.Query(ctx, queryInput)
+    if err != nil {
+        return nil, fmt.Errorf("Query failed: %w", err)
+    }
+    if len(queryResult.Items) == 0 {
+        return nil, nil // Not found
+    }
+    return unmarshalTransaction(queryResult.Items[0])
+}
+
+// UpdateTransaction updates specific fields of a transaction
+func UpdateTransaction(
+    ctx context.Context,
+    dbSvc *dynamodb.Client,
+    tenantID string,
+    systemTransactionID string,
+    updates map[string]interface{},
+) (*TransactionEntry, error) {
+
+    if tenantID == "" {
+        tenantID = "nil"
+    }
+
+    // 1. Prepare update expression
+    updateExpr := "SET "
+    attrValues := make(map[string]types.AttributeValue)
+    attrNames := make(map[string]string)
+    
+    i := 0
+    for field, value := range updates {
+        placeholder := fmt.Sprintf(":val%d", i)
+        namePlaceholder := fmt.Sprintf("#field%d", i)
+        
+        updateExpr += fmt.Sprintf("%s = %s, ", namePlaceholder, placeholder)
+        attrValues[placeholder] = createAttributeValue(value)
+        attrNames[namePlaceholder] = field
+        
+        i++
+    }
+    updateExpr = strings.TrimSuffix(updateExpr, ", ")
+
+    // 2. Execute update
+    input := &dynamodb.UpdateItemInput{
+        TableName: aws.String("TransactionsTable"),
+        Key: map[string]types.AttributeValue{
+            "TenantID":      &types.AttributeValueMemberS{Value: tenantID},
+            "TransactionID": &types.AttributeValueMemberS{Value: systemTransactionID},
+        },
+        UpdateExpression:          aws.String(updateExpr),
+        ExpressionAttributeValues: attrValues,
+        ExpressionAttributeNames:  attrNames,
+        ReturnValues:              types.ReturnValueAllNew,
+    }
+
+    result, err := dbSvc.UpdateItem(ctx, input)
+    if err != nil {
+        return nil, fmt.Errorf("failed to update transaction: %w", err)
+    }
+
+    // 3. Unmarshal and return updated transaction
+    var updatedTx TransactionEntry
+    err = attributevalue.UnmarshalMap(result.Attributes, &updatedTx)
+    if err != nil {
+        return nil, fmt.Errorf("failed to unmarshal updated transaction: %w", err)
+    }
+
+    return &updatedTx, nil
+}
+
+// Helper function to create AttributeValue from interface{}
+func createAttributeValue(value interface{}) types.AttributeValue {
+    switch v := value.(type) {
+    case string:
+        return &types.AttributeValueMemberS{Value: v}
+    case float64:
+        return &types.AttributeValueMemberN{Value: fmt.Sprintf("%f", v)}
+    case int:
+        return &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", v)}
+    case bool:
+        return &types.AttributeValueMemberBOOL{Value: v}
+    case time.Time:
+        return &types.AttributeValueMemberS{Value: v.Format(time.RFC3339)}
+    default:
+        return &types.AttributeValueMemberNULL{Value: true}
+    }
+}
+
+func unmarshalTransaction(item map[string]types.AttributeValue) (*TransactionEntry, error) {
+    var tx TransactionEntry
+    if err := attributevalue.UnmarshalMap(item, &tx); err != nil {
+        return nil, fmt.Errorf("unmarshal failed: %w", err)
+    }
+    return &tx, nil
+}
+
 func GetAllNilTransactions(ctx context.Context, dbSvc *dynamodb.Client, tenantId string, filter TransactionFilter) ([]TransactionEntry, map[string]types.AttributeValue, error) {
 	if tenantId == "" {
 		tenantId = "nil"
