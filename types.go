@@ -115,6 +115,7 @@ type TransactionEntry struct {
 	SignedUUID          string  `dynamodbav:"signed_uuid" json:"signed_uuid,omitempty"`
 
 	// ... new fields ...
+	IsCashOut        bool    `json:"is_cash_out" gorm:"default:false"` // Flag for CashOut transactions
 	BankAccountNo   string    `json:"bank_account_no"`
     BankCode        string    `json:"bank_code"`
     ApprovalStatus  string    `json:"approval_status" gorm:"default:'pending'"` // pending/approved/rejected
