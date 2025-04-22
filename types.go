@@ -113,17 +113,27 @@ type TransactionEntry struct {
 	InitiatorUUID       string  `dynamodbav:"UUID" json:"uuid,omitempty"`
 	Timestamp           string  `dynamodbav:"timestamp" json:"timestamp,omitempty"`
 	SignedUUID          string  `dynamodbav:"signed_uuid" json:"signed_uuid,omitempty"`
+
+	// ... new fields ...
+	BankAccountNo   string    `json:"bank_account_no"`
+    BankCode        string    `json:"bank_code"`
+    ApprovalStatus  string    `json:"approval_status" gorm:"default:'pending'"` // pending/approved/rejected
+    ApproverID      *string   `json:"approver_id"` // Nullable for admin who approved
+    ProcessedAt     *time.Time `json:"processed_at"`
+    RejectionReason *string    `json:"rejection_reason"`
 }
 
 // Create a new transacton entry and populate it with default time and status of 1, using the current time.
 // Should we use pointer? or use func (n *TransactionEntry) New() which us better
-func NewTransactionEntry(fromAccount, toAccount string, amount float64) TransactionEntry {
+func NewTransactionEntry(fromAccount, toAccount, bankAccountNo, bankCode string, amount float64) TransactionEntry {
 	uid := uuid.New().String()
 	failedTransaction := 1
 	return TransactionEntry{
 		SystemTransactionID: uid,
 		FromAccount:         fromAccount,
 		ToAccount:           toAccount,
+		BankAccountNo: 	 bankAccountNo,
+		BankCode:            bankCode,
 		Amount:              amount,
 		Comment:             "failed",
 		TransactionDate:     getCurrentTimestamp(),
